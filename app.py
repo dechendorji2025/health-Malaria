@@ -79,24 +79,68 @@ import json
 import pandas as pd
 
 geojson = json.load(open("data/bhutan_districts.json"))
+st.header("Malaria Case Summary and Map")
 
-layer = pdk.Layer(
-    "GeoJsonLayer",
-    geojson,
-    stroked=True,
-    filled=True,
-    get_fill_color="[255, 0, 0, 100]",
-)
+# --- Overall maximum across Bhutan ---
+max_cases = df["value_num"].max()
+max_year = df.loc[df["value_num"].idxmax(), "year"]
+st.write(f"**Maximum malaria cases in Bhutan:** {max_cases} (Year: {max_year})")
 
-view_state = pdk.ViewState(
-    latitude=27.5,
-    longitude=90.4,
-    zoom=7
-)
+# --- District-level analysis ---
+if "District" in df.columns:
+    # Compute max, min, and average per district
+    district_stats = df.groupby("District")["value_num"].agg(
+        max_cases="max",
+        min_cases="min",
+        avg_cases="mean"
+    ).reset_index()
 
-st.pydeck_chart(
-    pdk.Deck(
-        layers=[layer],
-        initial_view_state=view_state
+    # Identify top and bottom districts
+    top_district = district_stats.loc[district_stats["max_cases"].idxmax()]
+    min_district = district_stats.loc[district_stats["min_cases"].idxmin()]
+
+    st.write(f"**District with highest malaria cases:** {top_district['District']} ({top_district['max_cases']} cases)")
+    st.write(f"**District with minimum malaria cases:** {min_district['District']} ({min_district['min_cases']} cases)")
+
+    # --- Merge stats into GeoJSON ---
+    for feature in geojson["features"]:
+        district_name = feature["properties"]["DISTRICT"]  # adjust key if needed
+        match = district_stats[district_stats["District"] == district_name]
+        if not match.empty:
+            feature["properties"]["max_cases"] = int(match["max_cases"])
+            feature["properties"]["min_cases"] = int(match["min_cases"])
+            feature["properties"]["avg_cases"] = float(match["avg_cases"])
+        else:
+            feature["properties"]["max_cases"] = 0
+            feature["properties"]["min_cases"] = 0
+            feature["properties"]["avg_cases"] = 0
+
+    # --- Assign colors: red (max), green (min), yellow (average) ---
+    layer = pdk.Layer(
+        "GeoJsonLayer",
+        geojson,
+        stroked=True,
+        filled=True,
+        get_fill_color="""
+            [properties.max_cases == properties.max_cases ? [255, 0, 0, 150] :
+             properties.min_cases == properties.min_cases ? [0, 200, 0, 150] :
+             [255, 255, 0, 150]]
+        """,
+        pickable=True,
     )
-)
+
+    view_state = pdk.ViewState(
+        latitude=27.5,
+        longitude=90.4,
+        zoom=7
+    )
+
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=[layer],
+            initial_view_state=view_state,
+            tooltip={"text": "{DISTRICT}\\nMax: {max_cases}\\nMin: {min_cases}\\nAvg: {avg_cases}"}
+        )
+    )
+else:
+    st.warning("No district column found in dataset. Please add district info to plot cases.")
